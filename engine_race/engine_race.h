@@ -2,9 +2,24 @@
 #ifndef ENGINE_RACE_ENGINE_RACE_H_
 #define ENGINE_RACE_ENGINE_RACE_H_
 #include <string>
+#include <map>
+#include <atomic>
 #include "include/engine.h"
 
+const int NUM_PARTS = 256;
+
 namespace polar_race {
+
+class SpinLock {
+    std::atomic_flag locked = ATOMIC_FLAG_INIT ;
+public:
+    void lock() {
+        while (locked.test_and_set(std::memory_order_acquire)) { ; }
+    }
+    void unlock() {
+        locked.clear(std::memory_order_release);
+    }
+};
 
 class EngineRace : public Engine  {
  public:
@@ -30,7 +45,10 @@ class EngineRace : public Engine  {
       Visitor &visitor) override;
 
  private: 
-
+    SpinLock locks[NUM_PARTS];
+    std::map<std::string,std::string> data[NUM_PARTS];
+    int fds[NUM_PARTS];
+    int page_size;
 };
 
 }  // namespace polar_race
