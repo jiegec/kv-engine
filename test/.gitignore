@@ -1,0 +1,5 @@
+data
+*.dSYM
+crash_test
+single_thread_test
+multi_thread_test

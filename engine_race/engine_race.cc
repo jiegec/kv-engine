@@ -55,53 +55,70 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
   *eptr = NULL;
   EngineRace *engine_race = new EngineRace(name);
 
-  printf("opening %s\n", name.c_str());
+  printf("recovering %s\n", name.c_str());
   mkdir(name.c_str(), 0755);
+  int count = 0;
 
   for (int i = 0; i < NUM_PARTS; i++) {
     std::string file_name = name + "/" + mapping[i];
     int fd = open(file_name.c_str(), O_RDONLY);
     if (fd > 0) {
       while (1) {
-        uint32_t key_len, value_len;
+        uint32_t key_len, value_len, skip_len;
 
         if (read(fd, &key_len, 4) != 4) {
           close(fd);
           break;
         }
         if (read(fd, key_buffer, key_len) != key_len) {
-          printf("Unexpected data\n");
+          printf("unexpected data\n");
+          close(fd);
+          break;
+        }
+        if (read(fd, &skip_len, 4) != 4) {
+          printf("unexpected data\n");
           close(fd);
           break;
         }
         if (read(fd, &value_len, 4) != 4) {
-          printf("Unexpected data\n");
+          printf("unexpected data\n");
           close(fd);
           break;
         }
         if (read(fd, value_buffer, value_len) != value_len) {
-          printf("Unexpected data\n");
+          printf("unexpected data\n");
           close(fd);
           break;
         }
-        //printf("Recover %s %s\n", key_buffer, value_buffer);
-        std::string key(key_buffer);
+        std::string key(key_buffer, key_len);
+        std::string value(value_buffer, value_len);
         auto search = engine_race->data[i].find(key);
         if (search != engine_race->data[i].end()) {
           engine_race->data[i].erase(search);
         }
         engine_race->data[i].insert(
-            std::make_pair(key, std::string(value_buffer)));
+            std::make_pair(key, value));
+        count ++;
+        if (read(fd, value_buffer, skip_len) != skip_len) {
+          printf("unexpected data\n");
+          close(fd);
+          break;
+        }
       }
     }
   }
 
+  if (count) {
+    printf("replayed %d actions\n", count);
+  }
+
+  printf("opening %s\n", name.c_str());
   for (int i = 0; i < NUM_PARTS; i++) {
     std::string file_name = name + "/" + mapping[i];
     int fd = open(file_name.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_DIRECT, 0755);
     if (fd < 0) {
       perror("open");
-      printf("file %s unable to open\n", file_name.c_str());
+      printf("file %s is unable to open, check fd limit\n", file_name.c_str());
       engine_race->fds[i] = -1;
       return kIOError;
     } else {
@@ -124,23 +141,31 @@ EngineRace::~EngineRace() {
   }
 }
 
+thread_local char *write_buffer = NULL;
+
 // 3. Write a key-value pair into engine
 RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
-  const char *key_data = key.data();
-  int part = key_data[0];
-  char *write_buffer;
-  uint32_t key_len = key.size() + 1;
-  uint32_t value_len = value.size() + 1;
-  size_t total_len = 4 + key_len + 4 + value_len;
-  if (posix_memalign((void**)&write_buffer, page_size, total_len) < 0) {
-    perror("posix_memalign");
-    return kIOError;
+  uint8_t part = key[0];
+  uint32_t key_len = key.size();
+  uint32_t value_len = value.size();
+  size_t total_len = 4 + key_len + 4 + 4 + value_len;
+  total_len = (total_len + page_size - 1) & (-page_size);
+  if (write_buffer == NULL) {
+    int max_len = (4 + 4 + 4 + sizeof(key_buffer) + sizeof(value_buffer) + page_size - 1) & (-page_size);
+    if (posix_memalign((void**)&write_buffer, page_size, max_len) < 0) {
+      perror("posix_memalign");
+      return kIOError;
+    }
   }
+
   *((uint32_t *)write_buffer) = key_len;
   memcpy(&write_buffer[4], key.data(), key_len);
-  total_len = (total_len + page_size - 1) & (-page_size);
-  *((uint32_t *)&write_buffer[4 + key_len]) = total_len - 4 - key_len - 4;
-  memcpy(&write_buffer[4 + key_len + 4], value.data(), value_len);
+  *((uint32_t *)&write_buffer[4 + key_len]) = total_len - 4 - key_len - 4 - 4 - value_len;
+  *((uint32_t *)&write_buffer[4 + key_len + 4]) = value_len;
+  memcpy(&write_buffer[4 + key_len + 4 + 4], value.data(), value_len);
+
+  std::string key_string = key.ToString();
+  std::string value_string = value.ToString();
   locks[part].lock();
   size_t written = 0;
   while (written < total_len) {
@@ -155,21 +180,19 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
     }
   }
   //fsync(fds[part]);
-  auto search = data[part].find(key.ToString());
+  auto search = data[part].find(key_string);
   if (search != data[part].end()) {
     data[part].erase(search);
   }
   data[part].insert(
-      std::make_pair(key.ToString(), value.ToString()));
+      std::make_pair(key_string, value_string));
   locks[part].unlock();
-  free(write_buffer);
   return kSucc;
 }
 
 // 4. Read value of a key
 RetCode EngineRace::Read(const PolarString &key, std::string *value) {
-  const char *key_data = key.data();
-  int part = key_data[0];
+  uint8_t part = key[0];
   locks[part].lock();
   auto search = data[part].find(key.ToString());
   if (search != data[part].end()) {
