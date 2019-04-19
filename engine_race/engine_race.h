@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <atomic>
+#include <pthread.h>
 #include "include/engine.h"
 
 const int NUM_PARTS = 256;
@@ -45,7 +46,8 @@ class EngineRace : public Engine  {
       Visitor &visitor) override;
 
  private: 
-    SpinLock locks[NUM_PARTS];
+    //SpinLock locks[NUM_PARTS];
+    pthread_rwlock_t locks[NUM_PARTS];
     std::map<std::string,std::string> data[NUM_PARTS];
     int fds[NUM_PARTS];
     int page_size;

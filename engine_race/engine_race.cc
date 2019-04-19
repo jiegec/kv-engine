@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <stdint.h>
 
@@ -63,33 +64,51 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
     std::string file_name = name + "/" + mapping[i];
     int fd = open(file_name.c_str(), O_RDONLY);
     if (fd > 0) {
-      while (1) {
+      struct stat s;
+      if (fstat(fd, &s) < 0) {
+        perror("fstat");
+        continue;
+      }
+      if (s.st_size == 0) {
+        continue;
+      }
+      uint8_t *mapped = (uint8_t *) mmap(0, s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      uint8_t *orig_mapped = mapped;
+      uint8_t *end = mapped + s.st_size;
+      while (mapped < end) {
         uint32_t key_len, value_len, skip_len;
 
-        if (read(fd, &key_len, 4) != 4) {
-          close(fd);
+        if (mapped + 4 >= end) {
           break;
         }
-        if (read(fd, key_buffer, key_len) != key_len) {
-          printf("unexpected data\n");
-          close(fd);
+        key_len = *(uint32_t *)mapped;
+        mapped += 4;
+
+        if (mapped + key_len >= end) {
           break;
         }
-        if (read(fd, &skip_len, 4) != 4) {
-          printf("unexpected data\n");
-          close(fd);
+        memcpy(key_buffer, mapped, key_len);
+        mapped += key_len;
+
+        if (mapped + 4 >= end) {
           break;
         }
-        if (read(fd, &value_len, 4) != 4) {
-          printf("unexpected data\n");
-          close(fd);
+        skip_len = *(uint32_t *)mapped;
+        mapped += 4;
+
+        if (mapped + 4 >= end) {
           break;
         }
-        if (read(fd, value_buffer, value_len) != value_len) {
-          printf("unexpected data\n");
-          close(fd);
+        value_len = *(uint32_t *)mapped;
+        mapped += 4;
+
+        if (mapped + value_len >= end) {
           break;
         }
+        memcpy(value_buffer, mapped, value_len);
+        mapped += value_len;
+        mapped += skip_len;
+
         std::string key(key_buffer, key_len);
         std::string value(value_buffer, value_len);
         auto search = engine_race->data[i].find(key);
@@ -99,12 +118,10 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
         engine_race->data[i].insert(
             std::make_pair(key, value));
         count ++;
-        if (read(fd, value_buffer, skip_len) != skip_len) {
-          printf("unexpected data\n");
-          close(fd);
-          break;
-        }
       }
+
+      munmap(orig_mapped, s.st_size);
+      close(fd);
     }
   }
 
@@ -124,6 +141,8 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
     } else {
       engine_race->fds[i] = fd;
     }
+
+    engine_race->locks[i] = PTHREAD_RWLOCK_INITIALIZER;
   }
 
   engine_race->page_size = getpagesize();
@@ -166,17 +185,19 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
 
   std::string key_string = key.ToString();
   std::string value_string = value.ToString();
-  locks[part].lock();
+  //locks[part].lock();
+  pthread_rwlock_wrlock(&locks[part]);
   size_t written = 0;
   while (written < total_len) {
     int res = write(fds[part], &write_buffer[written], total_len - written);
-    if (res < 0) {
+    if (res >= 0) {
+      written += res;
+    } else {
       perror("write");
-      locks[part].unlock();
+      //locks[part].unlock();
+      pthread_rwlock_unlock(&locks[part]);
       free(write_buffer);
       return kIOError;
-    } else {
-      written += res;
     }
   }
   //fsync(fds[part]);
@@ -186,21 +207,25 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
   }
   data[part].insert(
       std::make_pair(key_string, value_string));
-  locks[part].unlock();
+  //locks[part].unlock();
+  pthread_rwlock_unlock(&locks[part]);
   return kSucc;
 }
 
 // 4. Read value of a key
 RetCode EngineRace::Read(const PolarString &key, std::string *value) {
   uint8_t part = key[0];
-  locks[part].lock();
+  pthread_rwlock_rdlock(&locks[part]);
+  //locks[part].lock();
   auto search = data[part].find(key.ToString());
   if (search != data[part].end()) {
     *value = search->second;
-    locks[part].unlock();
+    //locks[part].unlock();
+    pthread_rwlock_unlock(&locks[part]);
     return kSucc;
   } else {
-    locks[part].unlock();
+    //locks[part].unlock();
+    pthread_rwlock_unlock(&locks[part]);
     return kNotFound;
   }
 }
