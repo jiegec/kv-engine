@@ -1,58 +1,56 @@
 // Copyright [2018] Alibaba Cloud All rights reserved
 #ifndef ENGINE_RACE_ENGINE_RACE_H_
 #define ENGINE_RACE_ENGINE_RACE_H_
-#include <string>
-#include <map>
-#include <atomic>
-#include <pthread.h>
 #include "include/engine.h"
+#include "include/parallel_hashmap/phmap.h"
+#include <atomic>
+#include <map>
+#include <pthread.h>
+#include <string>
 
 const int NUM_PARTS = 256;
 
 namespace polar_race {
 
 class SpinLock {
-    std::atomic_flag locked = ATOMIC_FLAG_INIT ;
+  std::atomic_flag locked = ATOMIC_FLAG_INIT;
+
 public:
-    void lock() {
-        while (locked.test_and_set(std::memory_order_acquire)) { ; }
+  void lock() {
+    while (locked.test_and_set(std::memory_order_acquire)) {
+      ;
     }
-    void unlock() {
-        locked.clear(std::memory_order_release);
-    }
+  }
+  void unlock() { locked.clear(std::memory_order_release); }
 };
 
-class EngineRace : public Engine  {
- public:
-  static RetCode Open(const std::string& name, Engine** eptr);
+class EngineRace : public Engine {
+public:
+  static RetCode Open(const std::string &name, Engine **eptr);
 
-  explicit EngineRace(const std::string& dir) {
-  }
+  explicit EngineRace(const std::string &dir) {}
 
   ~EngineRace();
 
-  RetCode Write(const PolarString& key,
-      const PolarString& value) override;
+  RetCode Write(const PolarString &key, const PolarString &value) override;
 
-  RetCode Read(const PolarString& key,
-      std::string* value) override;
+  RetCode Read(const PolarString &key, std::string *value) override;
 
   /*
    * NOTICE: Implement 'Range' in quarter-final,
    *         you can skip it in preliminary.
    */
-  RetCode Range(const PolarString& lower,
-      const PolarString& upper,
-      Visitor &visitor) override;
+  RetCode Range(const PolarString &lower, const PolarString &upper,
+                Visitor &visitor) override;
 
- private: 
-    //SpinLock locks[NUM_PARTS];
-    pthread_rwlock_t locks[NUM_PARTS];
-    std::map<std::string,std::string> data[NUM_PARTS];
-    int fds[NUM_PARTS];
-    int page_size;
+private:
+  // SpinLock locks[NUM_PARTS];
+  pthread_rwlock_t locks[NUM_PARTS];
+  phmap::flat_hash_map<std::string, std::string> data[NUM_PARTS];
+  int fds[NUM_PARTS];
+  int page_size;
 };
 
-}  // namespace polar_race
+} // namespace polar_race
 
-#endif  // ENGINE_RACE_ENGINE_RACE_H_
+#endif // ENGINE_RACE_ENGINE_RACE_H_
