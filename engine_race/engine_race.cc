@@ -1,11 +1,11 @@
 // Copyright [2018] Alibaba Cloud All rights reserved
 #include "engine_race.h"
 #include <fcntl.h>
+#include <stdint.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/mman.h>
 #include <unistd.h>
-#include <stdint.h>
 
 namespace polar_race {
 
@@ -72,7 +72,8 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
       if (s.st_size == 0) {
         continue;
       }
-      uint8_t *mapped = (uint8_t *) mmap(0, s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      uint8_t *mapped =
+          (uint8_t *)mmap(0, s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
       uint8_t *orig_mapped = mapped;
       uint8_t *end = mapped + s.st_size;
       while (mapped < end) {
@@ -115,9 +116,8 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
         if (search != engine_race->data[i].end()) {
           engine_race->data[i].erase(search);
         }
-        engine_race->data[i].insert(
-            std::make_pair(key, value));
-        count ++;
+        engine_race->data[i].insert(std::make_pair(key, value));
+        count++;
       }
 
       munmap(orig_mapped, s.st_size);
@@ -132,7 +132,8 @@ RetCode EngineRace::Open(const std::string &name, Engine **eptr) {
   printf("opening %s\n", name.c_str());
   for (int i = 0; i < NUM_PARTS; i++) {
     std::string file_name = name + "/" + mapping[i];
-    int fd = open(file_name.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_DIRECT, 0755);
+    int fd =
+        open(file_name.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_DIRECT, 0755);
     if (fd < 0) {
       perror("open");
       printf("file %s is unable to open, check fd limit\n", file_name.c_str());
@@ -170,8 +171,9 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
   size_t total_len = 4 + key_len + 4 + 4 + value_len;
   total_len = (total_len + page_size - 1) & (-page_size);
   if (write_buffer == NULL) {
-    int max_len = (4 + 4 + 4 + sizeof(key_buffer) + sizeof(value_buffer) + page_size - 1) & (-page_size);
-    if (posix_memalign((void**)&write_buffer, page_size, max_len) < 0) {
+    int max_len =
+        (4 + 4 + 4 + 1024 + 1024 * 1024 * 4 + page_size - 1) & (-page_size);
+    if (posix_memalign((void **)&write_buffer, page_size, max_len) < 0) {
       perror("posix_memalign");
       return kIOError;
     }
@@ -179,13 +181,14 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
 
   *((uint32_t *)write_buffer) = key_len;
   memcpy(&write_buffer[4], key.data(), key_len);
-  *((uint32_t *)&write_buffer[4 + key_len]) = total_len - 4 - key_len - 4 - 4 - value_len;
+  *((uint32_t *)&write_buffer[4 + key_len]) =
+      total_len - 4 - key_len - 4 - 4 - value_len;
   *((uint32_t *)&write_buffer[4 + key_len + 4]) = value_len;
   memcpy(&write_buffer[4 + key_len + 4 + 4], value.data(), value_len);
 
   std::string key_string = key.ToString();
   std::string value_string = value.ToString();
-  //locks[part].lock();
+  // locks[part].lock();
   pthread_rwlock_wrlock(&locks[part]);
   size_t written = 0;
   while (written < total_len) {
@@ -194,20 +197,19 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
       written += res;
     } else {
       perror("write");
-      //locks[part].unlock();
+      // locks[part].unlock();
       pthread_rwlock_unlock(&locks[part]);
       free(write_buffer);
       return kIOError;
     }
   }
-  //fsync(fds[part]);
+  // fsync(fds[part]);
   auto search = data[part].find(key_string);
   if (search != data[part].end()) {
     data[part].erase(search);
   }
-  data[part].insert(
-      std::make_pair(key_string, value_string));
-  //locks[part].unlock();
+  data[part].insert(std::make_pair(key_string, value_string));
+  // locks[part].unlock();
   pthread_rwlock_unlock(&locks[part]);
   return kSucc;
 }
@@ -216,15 +218,15 @@ RetCode EngineRace::Write(const PolarString &key, const PolarString &value) {
 RetCode EngineRace::Read(const PolarString &key, std::string *value) {
   uint8_t part = key[0];
   pthread_rwlock_rdlock(&locks[part]);
-  //locks[part].lock();
+  // locks[part].lock();
   auto search = data[part].find(key.ToString());
   if (search != data[part].end()) {
     *value = search->second;
-    //locks[part].unlock();
+    // locks[part].unlock();
     pthread_rwlock_unlock(&locks[part]);
     return kSucc;
   } else {
-    //locks[part].unlock();
+    // locks[part].unlock();
     pthread_rwlock_unlock(&locks[part]);
     return kNotFound;
   }
@@ -256,7 +258,7 @@ RetCode EngineRace::Range(const PolarString &lower, const PolarString &upper,
   } else {
     upper_part = upper.data()[0];
   }
-  for (uint32_t i = lower_part;i <= upper_part;i++) {
+  for (uint32_t i = lower_part; i <= upper_part; i++) {
     if (i != NUM_PARTS) {
       pthread_rwlock_rdlock(&locks[i]);
     }
@@ -269,24 +271,24 @@ RetCode EngineRace::Range(const PolarString &lower, const PolarString &upper,
       begin++;
     }
     current_lower = PolarString("", 0);
-    lower_part ++;
+    lower_part++;
   }
   if (lower_part == upper_part && lower_part != NUM_PARTS) {
     auto begin = data[lower_part].lower_bound(current_lower.ToString());
     auto end = data[lower_part].upper_bound(upper.ToString());
-    end --;
+    end--;
     while (begin != end) {
       visitor.Visit(begin->first, begin->second);
       begin++;
     }
   }
-  for (uint32_t i = lower_part;i <= upper_part;i++) {
+  for (uint32_t i = lower_part; i <= upper_part; i++) {
     if (i != NUM_PARTS) {
       pthread_rwlock_unlock(&locks[i]);
     }
   }
 
-  return kSucc; 
+  return kSucc;
 }
 
 } // namespace polar_race
