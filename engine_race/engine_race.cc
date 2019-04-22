@@ -243,7 +243,50 @@ RetCode EngineRace::Read(const PolarString &key, std::string *value) {
 //   Range("", "", visitor)
 RetCode EngineRace::Range(const PolarString &lower, const PolarString &upper,
                           Visitor &visitor) {
-  return kSucc;
+  PolarString current_lower = lower;
+  uint32_t lower_part;
+  if (lower.size() == 0) {
+    lower_part = 0;
+  } else {
+    lower_part = lower.data()[0];
+  }
+  uint32_t upper_part;
+  if (upper.size() == 0) {
+    upper_part = NUM_PARTS;
+  } else {
+    upper_part = upper.data()[0];
+  }
+  for (uint32_t i = lower_part;i <= upper_part;i++) {
+    if (i != NUM_PARTS) {
+      pthread_rwlock_rdlock(&locks[i]);
+    }
+  }
+  while (lower_part < upper_part) {
+    auto begin = data[lower_part].lower_bound(current_lower.ToString());
+    auto end = data[lower_part].end();
+    while (begin != end) {
+      visitor.Visit(begin->first, begin->second);
+      begin++;
+    }
+    current_lower = PolarString("", 0);
+    lower_part ++;
+  }
+  if (lower_part == upper_part && lower_part != NUM_PARTS) {
+    auto begin = data[lower_part].lower_bound(current_lower.ToString());
+    auto end = data[lower_part].upper_bound(upper.ToString());
+    end --;
+    while (begin != end) {
+      visitor.Visit(begin->first, begin->second);
+      begin++;
+    }
+  }
+  for (uint32_t i = lower_part;i <= upper_part;i++) {
+    if (i != NUM_PARTS) {
+      pthread_rwlock_unlock(&locks[i]);
+    }
+  }
+
+  return kSucc; 
 }
 
 } // namespace polar_race
